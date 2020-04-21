@@ -1,0 +1,209 @@
+---
+title: "Clean GDSC Dataset"
+linkcolor: blue
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+
+options(max.print="75")
+opts_chunk$set(comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+
+library(here)
+library(tidyverse)
+```
+
+
+# Introduction
+
+In order to run this script, the `raw_GDSC2_data.zip` file (found in the `Data` subdirectory of this project) must be unzipped.
+These unzipped files are too large to be pushed to the GitHub directory unless using a paid version with large file storage. 
+The original dataset (along with all the raw data) is documented at [www.cancerrxgene.org](https://www.cancerrxgene.org). 
+
+In its entirity, this script should take 2-3 minutes to knit. 
+
+# Meta Cell Line Data (downloaded 22 August 19)
+
+## Read Data
+Here we read in the meta data for GDSC. 
+This contains all the cell lines by various identifiers (we use `COSMIC_ID`) and descriptions of each line, including tissue and histology of origin. 
+
+```{r read_gdsc_meta}
+
+cell_line_details <- read.csv(here("Data", "raw_GDSC2_Data", "cell_line_details.csv"), 
+                               stringsAsFactors = FALSE, na.strings = c("", "UNABLE TO CLASSIFY"))
+
+```
+
+## Clean Data
+We also do a couple quick cleaning steps:
+
+1. Adjusting a variable name containing a forward slash (`/`) to avoid errors later.
+2. Removing the row containing the total values
+
+```{r clean_gdsc_meta}
+# Adjust label for easier reading
+levels(cell_line_details$Cancer.Type..matching.TCGA.label.) <- 
+  c(levels(cell_line_details$Cancer.Type..matching.TCGA.label.), "COAD&READ")
+cell_line_details$Cancer.Type..matching.TCGA.label.[cell_line_details$Cancer.Type..matching.TCGA.label.=="COAD/READ"] <- "COAD&READ"
+
+# Remove row that doesn't represent a single entry
+cell_line_details <- cell_line_details[!(cell_line_details$Sample.Name =="TOTAL:"), ]
+```
+
+
+# Drug Response Data (downloaded 22 August 19)
+
+## Read Data
+
+Here we upload the drug response data from the second version of the GDSC dataset (GDSC2). Each cell line can still be identified using `COSMIC_ID`.
+```{r upload_gdsc_drug}
+dr_gdsc2 <- read.csv(here("Data", "raw_GDSC2_Data", "GDSC2_fitted_dose_response_17Jul19.csv"), 
+                     stringsAsFactors = FALSE)
+```
+
+## Clean Data
+We clean the data by adjusting data types and converting IC50 from natural log to log2.
+
+```{r clean_gdsc_drug}
+dr_gdsc2$MIN_CONC <- as.numeric(dr_gdsc2$MIN_CONC)
+dr_gdsc2$MAX_CONC <- as.numeric(dr_gdsc2$MAX_CONC)
+dr_gdsc2$LN_IC50 <- as.numeric(dr_gdsc2$LN_IC50)
+dr_gdsc2$AUC <- as.numeric(dr_gdsc2$AUC)
+dr_gdsc2$RMSE <- as.numeric(dr_gdsc2$RMSE)
+dr_gdsc2$Z_SCORE <- as.numeric(dr_gdsc2$Z_SCORE)
+dr_gdsc2$LN_IC50 <- exp(dr_gdsc2$LN_IC50)
+dr_gdsc2$LN_IC50 <- log2(dr_gdsc2$LN_IC50)
+dr_gdsc2_colnames <- colnames(dr_gdsc2)
+dr_gdsc2_colnames[16] <- "IC50"
+colnames(dr_gdsc2) <- dr_gdsc2_colnames
+```
+
+
+Let's take a look at what our dataframe looks like now.
+
+```{r examine_dr_data}
+colnames(dr_gdsc2)
+
+tbl_df(dr_gdsc2)
+```
+
+
+# Expression Data (downloaded 22 August 19)
+
+## Read Data
+
+We'll read in the GDSC expression data, which comes from microarray experiments. 
+Genes that have a blank entry for the gene symbol are removed.
+Details on the experimental protocols can be found [here](https://www.cancerrxgene.org/gdsc1000/GDSC1000_WebResources/Home.html). 
+
+```{r read_gdsc_expr}
+expr_gdsc_data <- read.csv(here("Data", "raw_GDSC2_Data", "Cell_line_RMA_proc_basalExp.csv"),
+                           stringsAsFactors = FALSE)
+expr_gdsc_data <- expr_gdsc_data[!(expr_gdsc_data$GENE_SYMBOLS==""), ]
+```
+
+
+## Clean Data
+
+In order to compare to TCGA data later, we must have matching ID names for each gene. GDSC labels genes using HGNC IDs, while TCGA uses Entrez ID. 
+Below, we convert GDSC gene names to Entrez ID using biomaRt. 
+Because the biomaRt query can take some time to complete, the results are saved to this repository. 
+If the user wishes to run the query themselves, they may uncomment all lines except the last line in the following code chunk. 
+
+```{r query_hgnc2entrez}
+
+# gene_hgnc_symbols <- expr_gdsc_data$GENE_SYMBOLS
+# ensembl = useDataset("hsapiens_gene_ensembl",mart=useMart("ensembl"))
+# gdsc_hgnc_entrez <- getBM(attributes=c('hgnc_symbol', 'entrezgene_id', 
+#                                        "external_gene_name"), 
+#                           filters = 'hgnc_symbol', 
+#                           values = gene_hgnc_symbols, 
+#                           uniqueRows = TRUE,
+#                           mart = ensembl)
+# saveRDS(gdsc_hgnc_entrez, "../biomaRt_query.rds")
+gdsc_hgnc_entrez <- readRDS(here("biomaRt_query_091619.rds"))
+```
+
+
+Once we have a data structure containing both symbols, we can convert the GDSC symbols from HGNC to Entrez IDs. 
+This requires removal of any genes from the GDSC set that don't map to an Entrez ID. 
+It also requires manually searching through the duplicate mappings to determine which Entrez ID should be used. 
+Additionally, there were two sets of two GDSC genes that mapped to the same Entrez ID. 
+The best HGNC genes to keep were determined manually as well.  
+
+```{r convert_gdsc_genenames}
+# Remove symbols that don't have Entrez ID
+gdsc_hgnc_entrez_trunc <- gdsc_hgnc_entrez[!(is.na(gdsc_hgnc_entrez$entrezgene_id)), ]
+
+# Find duplicated hgnc id's
+dups <- gdsc_hgnc_entrez_trunc[duplicated(gdsc_hgnc_entrez_trunc$hgnc_symbol), "hgnc_symbol"]
+remove_genes <- c("2844", "111089941", "107987478", "107987479", "100037417", 
+             "102724788", "107984125", "56260", "100533105", "6013", 
+             "101929777", "90632", "5554", "107986084", "104909134", "266",
+             "107080644", "100132596", "100913187", "3742", "643314",
+             "100653049", "84953", "100533467", "106821730", "9103", "388289",
+             "107987457", "107080638", "388813", "109504726", "102723899",
+             "100528062", "105372824", "110116772", "100534012", "285464", 
+             "112267859", "105372240", "113455421", "348738", "80111",
+             "102724985", "105374836", "110354863", "23285", "392490", 
+             "162967", "100526832", "107987373", "286223", "51326", 
+             "100996709", "267004", "3117", "653166", "100532736") # Manually determined from searching duplicate entrez ids 
+remove_rows <- c("15619", "14482") # Manually determined which should be removed
+
+# Extract hgnc-entrez comparison for duplicated entries
+gdsc_hgnc_entrez_dups <- gdsc_hgnc_entrez_trunc[gdsc_hgnc_entrez_trunc$hgnc_symbol %in% dups, ]
+gdsc_hgnc_entrez_dups_keep <- gdsc_hgnc_entrez_dups[!(gdsc_hgnc_entrez_dups$entrezgene_id 
+                                                      %in% remove_genes), ]
+gdsc_hgnc_entrez_dups_keep <- gdsc_hgnc_entrez_dups_keep[!(row.names(gdsc_hgnc_entrez_dups_keep) 
+                                                           %in% remove_rows), ]
+gdsc_hgnc_entrez_dups_remove <- gdsc_hgnc_entrez_dups[!row.names(gdsc_hgnc_entrez_dups) 
+                                                      %in% row.names(gdsc_hgnc_entrez_dups_keep), ]
+gdsc_hgnc_entrez_trunc <- gdsc_hgnc_entrez_trunc[!(gdsc_hgnc_entrez_trunc$entrezgene_id 
+                                                   %in% gdsc_hgnc_entrez_dups_remove$entrezgene_id), ]
+
+
+# Make changes in actual expression dataset
+expr_gdsc_data <- expr_gdsc_data[expr_gdsc_data$GENE_SYMBOLS 
+                                 %in% gdsc_hgnc_entrez_trunc$hgnc_symbol, ]
+expr_gdsc_data <- expr_gdsc_data[order(expr_gdsc_data$GENE_SYMBOLS), ]
+gdsc_hgnc_entrez_trunc <- gdsc_hgnc_entrez_trunc[order(gdsc_hgnc_entrez_trunc$hgnc_symbol), ]
+row.names(expr_gdsc_data) <- gdsc_hgnc_entrez_trunc$entrezgene_id
+expr_gdsc_rows <- row.names(expr_gdsc_data) # For use later when converting matrix --> df
+
+
+#* Set colnames to cosmic id ---------------------------------------------------
+expr_gdsc_data <- expr_gdsc_data[ , !(colnames(expr_gdsc_data) 
+                                      %in% c("GENE_title", "GENE_ID", "GENE_SYMBOLS"))]
+expr_gdsc_colnames <- colnames(expr_gdsc_data)
+expr_gdsc_colnames <- strsplit(expr_gdsc_colnames, "DATA.")
+expr_gdsc_cell_lines <- c()
+for (n in expr_gdsc_colnames){
+  expr_gdsc_cell_lines <- c(expr_gdsc_cell_lines, n[2])
+}
+colnames(expr_gdsc_data) <- expr_gdsc_cell_lines
+expr_gdsc_data <- as.data.frame(sapply(expr_gdsc_data, as.numeric))
+row.names(expr_gdsc_data) <- expr_gdsc_rows
+
+# Remove rows that aren't found in meta data
+expr_gdsc_data <- expr_gdsc_data[ , colnames(expr_gdsc_data) %in% cell_line_details$COSMIC.identifier]
+```
+
+# Save Data
+
+And finally, we'll save all our data into a single .RData file.
+```{r save_data}
+save(dr_gdsc2, 
+     expr_gdsc_data, 
+     cell_line_details, 
+     file = here("Data", "cleaned_gdsc_data.RData"))
+# load(here("Data", "cleaned_gdsc_data.RData"))
+```

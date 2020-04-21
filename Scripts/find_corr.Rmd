@@ -1,0 +1,105 @@
+---
+title: "Find Gene and Drug Correlation"
+author: "Jessica Scarborough"
+date: "4/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+
+options(max.print="200")
+opts_chunk$set(comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+
+library(here)
+library(tidyverse)
+```
+
+# Introduction
+
+This script will use cleaned data produced by the `clean_data.Rmd` script in order to examine connections between gene expression of individual genes and drug response from cancer cell lines in the GDSC dataset. The drug response data comes from the second version of the GDSC drug assays (GDSC2).
+
+In its entirety, this script should require less than 1 minute to knit. 
+
+# Load Data
+
+This code chunk will load all the cleaned data produced by the `clean_data.Rmd` script. 
+
+```{r load_gdsc_data}
+
+load(here("Data", "cleaned_gdsc_data.RData"))
+
+```
+
+# Explore Datasets
+
+## Drug Options
+
+First we'll list all 169 drugs in the dataset, so we know what is available to compare. 
+
+```{r list_drugs}
+
+unique(dr_gdsc2$DRUG_NAME)
+
+```
+
+
+## Gene Options
+
+All the genes here are listed by their Entrez ID. This can be found on the NCBI website for any gene name. Printing >16,000 IDs won't be very useful. Instead, look up your gene of interest and use this function to determine if it is found in this dataset. For example, [here](https://www.ncbi.nlm.nih.gov/gene/1956) we see that EGFR has an Entrez ID of 1956. If we put that number into the function call, we'll see that this gene is present in the dataset. 
+
+```{r gene_availability}
+
+geneHere <- function(gene_ID, expr_data = expr_gdsc_data){
+  genes <- row.names(expr_data)
+  gene_ID %in% genes
+}
+
+geneHere(gene_ID = "1956")
+
+```
+
+# Gene Expression and Drug Response Correlation
+
+Next, we'll code up a function to compare gene expression and drug response between cell lines. If you want to see the entirity of the results, simply uncomment the last line of the `gene_drug_correlation` function. Otherwise, this function will print the correlation value and p-value for the statistical test. If the p-value is $<1E-10$, it will be reported as 0. 
+
+```{r gene_drug_corr}
+
+gene_drug_correlation <- function(gene_ID, drug_name, drug_metric = c("IC50", "AUC"),
+                                  expr_data = expr_gdsc_data, drug_data = dr_gdsc2,
+                                  corr_method = c("pearson", "spearman")){
+  gene_expr <- data.frame(t(expr_data[gene_ID, ]), check.names = FALSE)
+  drug_resp <- drug_data %>%
+    filter(DRUG_NAME == drug_name) %>%
+    select(COSMIC_ID, drug_metric)
+  gene_drug_metrics <- merge(gene_expr, drug_resp, by.x = 0, 
+                             by.y = "COSMIC_ID")
+  colnames(gene_drug_metrics) <- c("COSMIC_ID", "gene_expr", drug_metric)
+  corr_results <- cor.test(gene_drug_metrics[ , 2], gene_drug_metrics[ , 3], method = corr_method)
+  print(paste0("There are ", nrow(gene_drug_metrics), " cell lines tested against ", drug_name, "."))
+  print(paste0("The ", corr_method, " correlation value is ", round(corr_results$estimate, digits = 3), "."))
+  print(paste0("The p-value for the test is ", round(corr_results$p.value, digits = 10), "."))
+  # print(corr_results)
+}
+```
+
+
+Here, we'll run the correlation function above. You will need to provide the following 4 variables: 
+
+- `gene_ID`: character; entrez ID for gene of interest
+- `drug_name`: character; drug name exactly as printed in the Drug Options section of this document
+- `drug_metric`: character; either `IC50` or `AUC`
+- `corr_method`: character; either `pearson` or `spearman`
+
+```{r run_corr_stats, warning=FALSE}
+
+gene_drug_correlation(gene_ID = "1956",
+                      drug_name = "Temozolomide", 
+                      drug_metric = "IC50", 
+                      corr_method = "spearman")
+
+
+```
