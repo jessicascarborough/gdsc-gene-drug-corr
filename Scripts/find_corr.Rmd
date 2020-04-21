@@ -64,6 +64,49 @@ geneHere(gene_ID = "1956")
 
 # Gene Expression and Drug Response Correlation
 
+## Generate Gene/Drug Data
+
+Now we're going to compare the gene expression of any given gene with the drug response of any given drug (measured by log2(IC50) or AUC). First, we'll extract the gene and drug response data and save it as a `.csv` file for use in other applications or data sharing. These files will be saved in the following filepath: `Data/Gene_Drug_Data`
+
+```{r gene_drug_data}
+
+gene_drug_data <- function(gene_ID, drug_name, drug_metric = c("IC50", "AUC"),
+                                  expr_data = expr_gdsc_data, drug_data = dr_gdsc2,
+                                  corr_method = c("pearson", "spearman")){
+  gene_expr <- data.frame(t(expr_data[gene_ID, ]), check.names = FALSE)
+  drug_resp <- drug_data %>%
+    filter(DRUG_NAME == drug_name) %>%
+    select(COSMIC_ID, drug_metric)
+  gene_drug_metrics <- merge(gene_expr, drug_resp, by.x = 0, 
+                             by.y = "COSMIC_ID")
+  colnames(gene_drug_metrics) <- c("COSMIC_ID", "gene_expr", drug_metric)
+  write.csv(gene_drug_metrics, 
+            file = here("Data", "Gene_Drug_Data", 
+                        paste0(gene_ID, "_", drug_name, "_", drug_metric, ".csv")),
+            quote = FALSE)
+}
+```
+
+
+And here, we'll run the data generation function. You will need to provide the following 4 variables: 
+
+- `gene_ID`: character; entrez ID for gene of interest
+- `drug_name`: character; drug name exactly as printed in the Drug Options section of this document
+- `drug_metric`: character; either `IC50` or `AUC`
+- `corr_method`: character; either `pearson` or `spearman`
+
+```{r run_gene_drug_data}
+
+gene_drug_data(gene_ID = "7015",
+               drug_name = "Bortezomib",
+               drug_metric = "AUC", 
+               corr_method = "spearman")
+
+```
+
+
+## Find Gene/Drug Correlation
+
 Next, we'll code up a function to compare gene expression and drug response between cell lines. If you want to see the entirity of the results, simply uncomment the last line of the `gene_drug_correlation` function. Otherwise, this function will print the correlation value and p-value for the statistical test. If the p-value is $<1E-10$, it will be reported as 0. 
 
 ```{r gene_drug_corr}
@@ -86,20 +129,92 @@ gene_drug_correlation <- function(gene_ID, drug_name, drug_metric = c("IC50", "A
 }
 ```
 
-
-Here, we'll run the correlation function above. You will need to provide the following 4 variables: 
-
-- `gene_ID`: character; entrez ID for gene of interest
-- `drug_name`: character; drug name exactly as printed in the Drug Options section of this document
-- `drug_metric`: character; either `IC50` or `AUC`
-- `corr_method`: character; either `pearson` or `spearman`
+Here, we'll run the correlation function above. You will need the same variables as the `gene_drug_data` function.
 
 ```{r run_corr_stats, warning=FALSE}
 
-gene_drug_correlation(gene_ID = "1956",
-                      drug_name = "Temozolomide", 
-                      drug_metric = "IC50", 
-                      corr_method = "spearman")
+gene_drug_correlation(gene_ID = "7015",
+               drug_name = "Bortezomib",
+               drug_metric = "AUC", 
+               corr_method = "spearman")
 
 
 ```
+
+
+## Plot Gene/Drug Correlation
+
+```{r plot_corr}
+
+gene_drug_plot <- function(gene_ID, drug_name, drug_metric = c("IC50", "AUC"),
+                                  expr_data = expr_gdsc_data, drug_data = dr_gdsc2,
+                                  corr_method = c("pearson", "spearman")){
+  gene_expr <- data.frame(t(expr_data[gene_ID, ]), check.names = FALSE)
+  drug_resp <- drug_data %>%
+    filter(DRUG_NAME == drug_name) %>%
+    select(COSMIC_ID, drug_metric)
+  gene_drug_metrics <- merge(gene_expr, drug_resp, by.x = 0, 
+                             by.y = "COSMIC_ID")
+  colnames(gene_drug_metrics) <- c("COSMIC_ID", "gene_expr", drug_metric)
+  corr_results <- cor.test(gene_drug_metrics[ , 2], gene_drug_metrics[ , 3], method = corr_method)
+  corr_plot <- ggplot(gene_drug_metrics, aes(gene_expr, eval(as.name(paste(drug_metric))))) + 
+    ggtitle(paste0("Gene Expression of ", gene_ID, " vs. ", drug_metric, " of ", drug_name)) + 
+    labs(x = "Gene Expression", y = drug_metric) +
+    geom_point() +
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5))
+  print(corr_plot)
+  png(filename = here("Plots", paste0(gene_ID, "_", drug_name, "_", drug_metric, "_", corr_method, ".png")))
+  print(corr_plot)
+  dev.off()
+}
+
+```
+
+And here, we'll run the plotting function using the same variables as the `gene_drug_data` function.
+
+```{r run_plot_corr, warning=FALSE}
+
+gene_drug_plot(gene_ID = "7015",
+               drug_name = "Bortezomib",
+               drug_metric = "IC50", 
+               corr_method = "spearman")
+
+```
+
+## Run All Gene/Drug Correlation Functions
+
+For simplicity, we'll make a wrapper function to run all three of the above functions: `gene_drug_data`, `gene_drug_correlation`, and `gene_drug_plot`.
+
+```{r gene_drug_all}
+
+gene_drug_all <- function(gene_ID, drug_name, drug_metric = c("IC50", "AUC"),
+                                  expr_data = expr_gdsc_data, drug_data = dr_gdsc2,
+                                  corr_method = c("pearson", "spearman")){
+  gene_drug_data(gene_ID = gene_ID,
+                 drug_name = drug_name,
+                 drug_metric = drug_metric, 
+                 corr_method = corr_method)
+  gene_drug_correlation(gene_ID = gene_ID,
+                        drug_name = drug_name,
+                        drug_metric = drug_metric, 
+                        corr_method = corr_method)
+  gene_drug_plot(gene_ID = gene_ID,
+                 drug_name = drug_name,
+                 drug_metric = drug_metric, 
+                 corr_method = corr_method)
+}
+
+```
+
+And below, we'll run it using the same variables as the `gene_drug_data` function. 
+
+```{r run_gene_drug_all, warning=FALSE}
+
+gene_drug_all(gene_ID = "7015",
+               drug_name = "Bortezomib",
+               drug_metric = "IC50", 
+               corr_method = "spearman")
+
+```
+
